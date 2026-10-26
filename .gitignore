@@ -1,0 +1,9 @@
+# WorkBuddy 内部文件（含用户记忆与部署追踪标记，不入库）
+.workbuddy/
+*.genie
+
+# 系统/编辑器
+.DS_Store
+Thumbs.db
+.DS_Store
+node_modules/

@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1, user-scalable=no">
+  <meta name="theme-color" content="#3b6ef5">
+  <meta name="description" content="多多管家 · iPhone 家务管理：食品保质期、收纳、语音智能分类、家务与每日必做">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="apple-mobile-web-app-title" content="多多管家">
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+  <link rel="icon" href="icons/icon-192.png">
+  <link rel="manifest" href="manifest.json">
+  <link rel="stylesheet" href="css/styles.css">
+  <title>多多管家</title>
+</head>
+<body>
+  <div id="app">
+    <main id="view"></main>
+    <nav class="nav">
+      <button data-tab="food"><span class="ic">🥫</span><span>食品</span></button>
+      <button data-tab="storage"><span class="ic">📦</span><span>收纳</span></button>
+      <button data-tab="voice"><span class="ic">🎤</span><span>语音</span></button>
+      <button data-tab="chores"><span class="ic">✅</span><span>家务</span></button>
+      <button data-tab="dailies"><span class="ic">📅</span><span>每日</span></button>
+      <button data-tab="me"><span class="ic">👤</span><span>我的</span></button>
+    </nav>
+  </div>
+  <div id="modal" class="modal"></div>
+  <div id="toast" class="toast"></div>
+  <script src="js/db.js"></script>
+  <script src="js/cloud-config.js"></script>
+  <script src="js/classify.js"></script>
+  <script src="js/speech.js"></script>
+  <script src="js/share.js"></script>
+  <script src="js/ocr.js"></script>
+  <script src="js/receipt.js"></script>
+  <script src="js/cloud.js"></script>
+  <script src="js/app.js"></script>
+  <script>
+    // 注册 Service Worker（离线可用 + 可安装到主屏幕）
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', function () {
+        navigator.serviceWorker.register('sw.js').catch(function (e) { console.warn('SW 注册失败', e); });
+      });
+    }
+  </script>
+</body>
+</html>
