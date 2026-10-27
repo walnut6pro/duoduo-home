@@ -12,7 +12,7 @@
 
   var state = {
     tab: 'food',
-    food: [], boxes: [], items: [], chores: [], dailies: [],
+    food: [], boxes: [], items: [], chores: [], dailies: [], bills: [],
     remindDays: 7, notifEnabled: false, _notifiedToday: '',
     shareRoomId: '', shareAuto: false,
     autoBackup: false, autoBackupDays: 1
@@ -77,18 +77,20 @@
   function loadAll() {
     return Promise.all([
       CloudDB.getAll('food'), CloudDB.getAll('boxes'), CloudDB.getAll('items'),
-      CloudDB.getAll('chores'), CloudDB.getAll('dailies'), CloudDB.getMeta('remindDays', 7),
+      CloudDB.getAll('chores'), CloudDB.getAll('dailies'), CloudDB.getAll('bills'),
+      CloudDB.getMeta('remindDays', 7),
       CloudDB.getMeta('shareRoomId', ''), CloudDB.getMeta('shareAutoPublish', false),
       CloudDB.getMeta('autoBackup', false), CloudDB.getMeta('autoBackupDays', 0),
       CloudDB.getMeta('autoBackupMin', 0) // 旧版「分钟」设置，仅用于迁移
     ]).then(function (r) {
       state.food = r[0]; state.boxes = r[1]; state.items = r[2];
-      state.chores = r[3]; state.dailies = r[4]; state.remindDays = +r[5] || 7;
-      state.shareRoomId = r[6] || ''; state.shareAuto = !!r[7];
-      state.autoBackup = !!r[8];
+      state.chores = r[3]; state.dailies = r[4]; state.bills = r[5];
+      state.remindDays = +r[6] || 7;
+      state.shareRoomId = r[7] || ''; state.shareAuto = !!r[8];
+      state.autoBackup = !!r[9];
       // 备份间隔统一以「天」为单位；兼容旧版分钟设置（15 分钟 ≈ 1 天）
-      var days = +r[9] || 0;
-      if (!days) { var oldMin = +r[10] || 0; days = oldMin ? Math.max(1, Math.round(oldMin / 1440)) : 1; }
+      var days = +r[10] || 0;
+      if (!days) { var oldMin = +r[11] || 0; days = oldMin ? Math.max(1, Math.round(oldMin / 1440)) : 1; }
       state.autoBackupDays = Math.min(365, Math.max(1, days));
     });
   }
@@ -438,6 +440,182 @@
     });
   }
 
+  /* ---------- 视图：记账（家庭账本） ---------- */
+  // 主流记账分类（支出 / 收入分开，符合日常记账习惯）
+  var BILL_EXPENSE_CATS = ['餐饮', '买菜', '交通', '购物', '居住', '通讯', '水电燃气', '娱乐', '医疗', '教育', '人情', '宠物', '旅行', '其他支出'];
+  var BILL_INCOME_CATS = ['工资', '奖金', '理财', '兼职', '红包', '退款', '其他收入'];
+  var BILL_CAT_ICON = {
+    '餐饮': '🍜', '买菜': '🥬', '交通': '🚌', '购物': '🛍️', '居住': '🏠', '通讯': '📱', '水电燃气': '💡',
+    '娱乐': '🎮', '医疗': '💊', '教育': '📚', '人情': '🧧', '宠物': '🐾', '旅行': '✈️', '其他支出': '💸',
+    '工资': '💰', '奖金': '🎁', '理财': '📈', '兼职': '💼', '红包': '🧧', '退款': '↩️', '其他收入': '💵'
+  };
+  function num(x) { var n = parseFloat(x); return isNaN(n) ? 0 : n; }
+  function fmt(x) {
+    var n = num(x); var s = (Math.round(n * 100) / 100).toFixed(2);
+    var p = s.split('.'); p[0] = p[0].replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+    return p.join('.');
+  }
+  function prevDay() { var d = new Date(); d.setDate(d.getDate() - 1); return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()); }
+
+  function viewBill() {
+    var bills = state.bills.slice().sort(function (a, b) {
+      if ((b.date || '') !== (a.date || '')) return (b.date || '').localeCompare(a.date || '');
+      return (b.createdAt || 0) - (a.createdAt || 0);
+    });
+    var ym = today().slice(0, 7);
+    var inc = 0, exp = 0;
+    bills.forEach(function (b) {
+      var amt = num(b.amount);
+      if ((b.date || '').slice(0, 7) === ym) { if (b.type === 'income') inc += amt; else exp += amt; }
+    });
+    var summary = '<div class="bill-summary">' +
+      '<div class="bs-item"><span class="bs-label">本月收入</span><span class="bs-val inc">+¥' + fmt(inc) + '</span></div>' +
+      '<div class="bs-item"><span class="bs-label">本月支出</span><span class="bs-val exp">-¥' + fmt(exp) + '</span></div>' +
+      '<div class="bs-item"><span class="bs-label">结余</span><span class="bs-val">¥' + fmt(inc - exp) + '</span></div>' +
+      '</div>';
+
+    // 按日期分组
+    var groups = [], map = {};
+    bills.forEach(function (b) {
+      var d = b.date || '未知日期';
+      if (!map[d]) { map[d] = []; groups.push(d); }
+      map[d].push(b);
+    });
+    var list = groups.length ? groups.map(function (d) {
+      var rows = map[d], dayExp = 0, dayInc = 0;
+      var items = rows.map(function (b) {
+        var amt = num(b.amount); if (b.type === 'income') dayInc += amt; else dayExp += amt;
+        var icon = BILL_CAT_ICON[b.category] || (b.type === 'income' ? '💵' : '💸');
+        var amountCls = b.type === 'income' ? 'inc' : 'exp';
+        var amountTxt = (b.type === 'income' ? '+' : '-') + '¥' + fmt(amt);
+        return '<div class="card bill-row">' +
+          '<div class="card-main">' +
+          '<div class="card-title">' + icon + ' ' + esc(b.category || (b.type === 'income' ? '其他收入' : '其他支出')) +
+          (b.note ? ' <span class="tag">' + esc(b.note) + '</span>' : '') + '</div>' +
+          '</div>' +
+          '<div class="card-side">' +
+          '<span class="bill-amt ' + amountCls + '">' + amountTxt + '</span>' +
+          '<div class="row-act"><button data-act="editBill" data-id="' + b.id + '">编辑</button>' +
+          '<button data-act="delBill" data-id="' + b.id + '">删除</button></div>' +
+          '</div></div>';
+      }).join('');
+      var dLabel = d === today() ? '今天' : (d === prevDay() ? '昨天' : d);
+      var daySum = (dayInc ? '收 ¥' + fmt(dayInc) + ' ' : '') + (dayExp ? '支 ¥' + fmt(dayExp) : '');
+      return '<div class="day-group"><div class="day-head"><span>' + esc(dLabel) + '</span><span class="day-sum">' + daySum + '</span></div>' + items + '</div>';
+    }).join('') : '<div class="empty">还没有记账，点右下角“＋”开始，或点🎤语音记账～</div>';
+
+    return '<div class="head"><h1>记账</h1><div class="head-act">' +
+      (HSpeech.supported() ? '<button class="add" id="billMic">🎤 语音记账</button>' : '') +
+      '<button class="add" data-act="addBill">＋ 记一笔</button></div></div>' +
+      summary + '<div class="list">' + list + '</div>';
+  }
+
+  function billForm(editObj) {
+    var b = editObj || {};
+    var type = b.type || 'expense';
+    var catOpts = (type === 'income' ? BILL_INCOME_CATS : BILL_EXPENSE_CATS).map(function (c) {
+      return '<option' + (c === (b.category || (type === 'income' ? '其他收入' : '其他支出')) ? ' selected' : '') + '>' + c + '</option>';
+    }).join('');
+    return '<form>' +
+      '<div class="seg">' +
+      '<label class="seg-item' + (type === 'expense' ? ' on' : '') + '"><input type="radio" name="type" value="expense"' + (type === 'expense' ? ' checked' : '') + '>支出</label>' +
+      '<label class="seg-item' + (type === 'income' ? ' on' : '') + '"><input type="radio" name="type" value="income"' + (type === 'income' ? ' checked' : '') + '>收入</label>' +
+      '</div>' +
+      field('金额（元）', '<input name="amount" type="number" step="0.01" min="0" required value="' + esc(b.amount != null ? b.amount : '') + '" placeholder="0.00">') +
+      field('分类', '<select name="category">' + catOpts + '</select>') +
+      field('日期', '<input type="date" name="date" value="' + esc(b.date || today()) + '">') +
+      field('备注', '<input name="note" value="' + esc(b.note || '') + '" placeholder="选填，如：和老婆吃饭">') +
+      '<button class="primary" type="submit">' + (editObj ? '保存修改' : '保存') + '</button></form>';
+  }
+  function openBillModal(editObj) {
+    openModal(editObj ? '编辑账单' : '记一笔', billForm(editObj), function (form) {
+      var v = formVals(form);
+      var amt = parseFloat(v.amount);
+      if (isNaN(amt) || amt <= 0) { toast('请输入有效金额'); return false; }
+      var obj = editObj ? Object.assign({}, editObj, {
+        type: v.type, amount: amt, category: v.category, date: v.date || today(), note: v.note || '', updatedAt: Date.now()
+      }) : {
+        id: CloudDB.id(), type: v.type, amount: amt, category: v.category,
+        date: v.date || today(), note: v.note || '', createdAt: Date.now(), updatedAt: Date.now()
+      };
+      return CloudDB.put('bills', obj).then(function () { return afterSave('已保存'); });
+    });
+    // 切换「支出/收入」时刷新分类下拉选项
+    var f = $('#modal form');
+    if (f) f.addEventListener('change', function (e) {
+      if (e.target && e.target.name === 'type') {
+        var cats = f.type.value === 'income' ? BILL_INCOME_CATS : BILL_EXPENSE_CATS;
+        var sel = f.category;
+        if (sel) {
+          var cur = sel.value;
+          sel.innerHTML = cats.map(function (c) { return '<option' + (c === cur ? ' selected' : '') + '>' + c + '</option>'; }).join('');
+        }
+      }
+    });
+  }
+
+  // 中文数字兜底（语音偶尔返回「一千」「五十」而不是阿拉伯数字）
+  function cnNum(s) {
+    var map = { '零': 0, '一': 1, '二': 2, '两': 2, '三': 3, '四': 4, '五': 5, '六': 6, '七': 7, '八': 8, '九': 9 };
+    var unit = { '十': 10, '百': 100, '千': 1000, '万': 10000 };
+    if (!/[零一二两三四五六七八九十百千万]/.test(s)) return 0;
+    var total = 0, num = 0;
+    for (var k = 0; k < s.length; k++) {
+      var ch = s[k];
+      if (map[ch] !== undefined) num = map[ch];
+      else if (unit[ch]) { if (num === 0) num = 1; total += num * unit[ch]; num = 0; }
+    }
+    return total + num;
+  }
+  // 语音记账：把自然语言解析为 {type, amount, category}
+  function parseVoiceBill(text) {
+    var t = (text || '').replace(/\s+/g, '');
+    var incomeKw = ['收入', '工资', '薪水', '月薪', '奖金', '年终', '理财', '利息', '基金', '分红', '兼职', '副业', '外快', '退款', '报销', '提成', '收到', '进账', '领红包', '转账收入'];
+    var isIncome = incomeKw.some(function (k) { return t.indexOf(k) >= 0; });
+    var type = isIncome ? 'income' : 'expense';
+    var m = t.match(/(\d+(\.\d+)?)\s*(万|千)?/);
+    var amount = 0;
+    if (m) { amount = parseFloat(m[1]); if (m[3] === '万') amount *= 10000; else if (m[3] === '千') amount *= 1000; }
+    if (!amount) { // 语音有时返回中文数字（一千/五十），兜底转换
+      var cn = t.match(/[零一二两三四五六七八九十百千万]+/);
+      if (cn) { var c = cnNum(cn[0]); if (c > 0) amount = c; }
+    }
+    var cat = type === 'income' ? '其他收入' : '其他支出';
+    var rules = type === 'income'
+      ? [['工资', '工资'], ['薪水', '工资'], ['月薪', '工资'], ['奖金', '奖金'], ['年终', '奖金'], ['理财', '理财'], ['利息', '理财'], ['基金', '理财'], ['分红', '理财'], ['兼职', '兼职'], ['副业', '兼职'], ['外快', '兼职'], ['退款', '退款'], ['报销', '退款'], ['红包', '红包'], ['转账', '红包']]
+      : [['吃', '餐饮'], ['饭', '餐饮'], ['餐', '餐饮'], ['外卖', '餐饮'], ['奶茶', '餐饮'], ['咖啡', '餐饮'], ['饮料', '餐饮'], ['早饭', '餐饮'], ['午饭', '餐饮'], ['晚饭', '餐饮'], ['夜宵', '餐饮'], ['菜', '买菜'], ['水果', '买菜'], ['打车', '交通'], ['车', '交通'], ['地铁', '交通'], ['公交', '交通'], ['加油', '交通'], ['停车', '交通'], ['高铁', '交通'], ['火车', '交通'], ['飞机', '交通'], ['买', '购物'], ['购', '购物'], ['淘宝', '购物'], ['京东', '购物'], ['超市', '购物'], ['衣服', '购物'], ['鞋', '购物'], ['房租', '居住'], ['物业', '居住'], ['房贷', '居住'], ['话费', '通讯'], ['电话', '通讯'], ['流量', '通讯'], ['宽带', '通讯'], ['水', '水电燃气'], ['电', '水电燃气'], ['燃气', '水电燃气'], ['电影', '娱乐'], ['游戏', '娱乐'], ['娱乐', '娱乐'], ['ktv', '娱乐'], ['药', '医疗'], ['医', '医疗'], ['医院', '医疗'], ['体检', '医疗'], ['书', '教育'], ['课', '教育'], ['学费', '教育'], ['培训', '教育'], ['学习', '教育'], ['红包', '人情'], ['礼金', '人情'], ['随礼', '人情'], ['宠物', '宠物'], ['猫', '宠物'], ['狗', '宠物'], ['旅游', '旅行'], ['旅行', '旅行'], ['酒店', '旅行'], ['景点', '旅行']];
+    for (var i = 0; i < rules.length; i++) { if (t.indexOf(rules[i][0]) >= 0) { cat = rules[i][1]; break; } }
+    if (t.indexOf('红包') >= 0 && (t.indexOf('发') >= 0 || t.indexOf('给') >= 0 || t.indexOf('送') >= 0) && !isIncome) cat = '人情';
+    return { type: type, amount: amount, category: cat };
+  }
+  var billVoiceHandle = null;
+  function setBillMic(on) {
+    var b = $('#billMic');
+    if (b) { b.textContent = on ? '⏹ 完成' : '🎤 语音记账'; b.classList.toggle('on', on); }
+  }
+  function bindBillVoice() {
+    var mic = $('#billMic');
+    if (!mic) return;
+    mic.onclick = function () {
+      if (billVoiceHandle) { billVoiceHandle.stop(); billVoiceHandle = null; setBillMic(false); return; }
+      if (!HSpeech.supported()) { toast('当前浏览器不支持语音'); return; }
+      setBillMic(true);
+      billVoiceHandle = HSpeech.start(function (txt) {
+        billVoiceHandle = null; setBillMic(false);
+        if (!txt) { toast('没听清，请再说一次'); return; }
+        var p = parseVoiceBill(txt);
+        if (!p.amount || p.amount <= 0) { toast('没识别到金额：' + txt); return; }
+        var obj = { id: CloudDB.id(), type: p.type, amount: p.amount, category: p.category, date: today(), note: '', createdAt: Date.now(), updatedAt: Date.now() };
+        CloudDB.put('bills', obj).then(function () {
+          return afterSave('已记账：' + (p.type === 'income' ? '收入' : '支出') + ' ¥' + fmt(p.amount) + '（' + p.category + '）');
+        });
+      }, function (err) {
+        billVoiceHandle = null; setBillMic(false);
+        toast('语音识别失败：' + (err && err.error || '未知'));
+      });
+    };
+  }
+
   /* ---------- 视图：我的 ---------- */
   function viewMe() {
     var notif = ('Notification' in window) ? (Notification.permission === 'granted' ? '已开启' : '<button class="mini" data-act="enableNotif">开启通知</button>') : '当前浏览器不支持';
@@ -479,7 +657,7 @@
   }
 
   /* ---------- 家庭实时同步（共享数据表，双向） ---------- */
-  var SYNC_TYPES = ['food', 'boxes', 'items', 'chores', 'dailies'];
+  var SYNC_TYPES = ['food', 'boxes', 'items', 'chores', 'dailies', 'bills'];
   var SYNC_PULL_MS = 8000;
   var _syncTimer = null;
   function upsertLocal(type, it) {
@@ -538,7 +716,7 @@
   }
 
   /* ---------- 渲染 ---------- */
-  var VIEWS = { food: viewFood, storage: viewStorage, voice: viewVoice, chores: viewChores, dailies: viewDailies, me: viewMe };
+  var VIEWS = { food: viewFood, storage: viewStorage, voice: viewVoice, chores: viewChores, dailies: viewDailies, bill: viewBill, me: viewMe };
   function render() {
     var v = $('#view');
     v.innerHTML = (VIEWS[state.tab] || viewFood)();
@@ -548,6 +726,7 @@
       // 停留在语音页时，保留上一次识别结果卡片，方便连续录入
       if (lastVoice && lastParse) showVoiceResult(lastVoice, true);
     }
+    if (state.tab === 'bill') bindBillVoice();
   }
 
   /* ---------- 语音绑定 ---------- */
@@ -663,6 +842,9 @@
       case 'toggleDaily':
         CloudDB.get('dailies', id).then(function (d) { d.lastDoneDate = (d.lastDoneDate === today()) ? '' : today(); return CloudDB.put('dailies', d); }).then(function () { afterSave(); });
         break;
+      case 'addBill': openBillModal(null); break;
+      case 'editBill': CloudDB.get('bills', id).then(function (o) { openBillModal(o); }); break;
+      case 'delBill': confirmDel('bills', id, '账单'); break;
       case 'scanReceipt': scanReceipt(); break;
       case 'setRemind': openRemindModal(); break;
       case 'enableNotif':
@@ -927,7 +1109,7 @@
 
   /* ---------- 共享房间（方案 B）辅助 ---------- */
   function currentPayload() {
-    return { food: state.food, boxes: state.boxes, items: state.items, chores: state.chores, dailies: state.dailies };
+    return { food: state.food, boxes: state.boxes, items: state.items, chores: state.chores, dailies: state.dailies, bills: state.bills };
   }
   function ensureRoom() {
     if (state.shareRoomId) return Promise.resolve(state.shareRoomId);
@@ -1077,7 +1259,7 @@
   /* ---------- 自动本地备份（防平台数据丢失） ---------- */
   var _backupTimer = null;
   function backupSnapshotData() {
-    return { food: state.food, boxes: state.boxes, items: state.items, chores: state.chores, dailies: state.dailies };
+    return { food: state.food, boxes: state.boxes, items: state.items, chores: state.chores, dailies: state.dailies, bills: state.bills };
   }
   // 把当前（已合并云端）数据存一份带时间戳的快照到本机 IndexedDB，仅保留最近 30 份
   function saveLocalBackup() {

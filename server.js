@@ -123,7 +123,7 @@ function handleRoom(req, res, id) {
  *   GET  /api/shared        拉取全量（含已删除项列表，用于跨端传播删除）
  *   POST /api/shared/sync   推送一批变更（upsert/delete），按 id+updatedAt last-write-wins 合并，返回合并后全量
  */
-var SHARED_TYPES = ['food', 'boxes', 'items', 'chores', 'dailies'];
+var SHARED_TYPES = ['food', 'boxes', 'items', 'chores', 'dailies', 'bills'];
 function emptyShared() { var o = {}; SHARED_TYPES.forEach(function (k) { o[k] = []; }); return o; }
 // 归并去重：同一 id 只保留 updatedAt 最大的一行（相等时优先非删除），杜绝旧代码遗留的重复行
 function defragShared(d) {

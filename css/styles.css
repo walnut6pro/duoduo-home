@@ -195,3 +195,28 @@ body{
 .sinput{width:100%;border:1px solid var(--line);border-radius:10px;padding:11px 12px;font-size:15px;margin-bottom:10px;background:#fff;color:var(--text)}
 .slist .srow.tap{cursor:pointer}
 .slist .srow.tap:active{background:#f3f6fc}
+
+/* ---------- 记账（家庭账本） ---------- */
+.bill-summary{display:flex;gap:10px;margin:2px 2px 14px}
+.bill-summary .bs-item{flex:1;background:var(--card);border-radius:14px;padding:12px 6px;text-align:center;box-shadow:var(--shadow)}
+.bill-summary .bs-label{display:block;font-size:12px;color:var(--sub);margin-bottom:4px}
+.bill-summary .bs-val{font-size:17px;font-weight:700}
+.bill-summary .bs-val.inc{color:var(--ok)}
+.bill-summary .bs-val.exp{color:var(--exp)}
+.day-group{margin-bottom:14px}
+.day-head{display:flex;justify-content:space-between;align-items:center;padding:4px 6px;font-size:13px;color:var(--sub)}
+.day-head .day-sum{font-size:12px}
+.bill-row{justify-content:space-between}
+.bill-amt{font-size:17px;font-weight:700;margin-bottom:4px}
+.bill-amt.inc{color:var(--ok)}
+.bill-amt.exp{color:var(--exp)}
+/* 支出/收入分段切换 */
+.seg{display:flex;background:#f1f4f9;border-radius:12px;padding:4px;margin-bottom:4px}
+.seg-item{flex:1;text-align:center;padding:9px 0;border-radius:9px;font-size:15px;font-weight:600;color:var(--sub);cursor:pointer}
+.seg-item input{display:none}
+.seg-item.on{background:#fff;color:var(--text);box-shadow:0 1px 4px rgba(30,40,70,.12)}
+.seg-item:nth-child(1).on{color:var(--exp)}
+.seg-item:nth-child(2).on{color:var(--ok)}
+/* 语音记账麦克风激活态 */
+.add.on{background:var(--exp);animation:pulse 1.2s infinite}
+@keyframes pulse{0%{box-shadow:0 0 0 0 rgba(229,72,77,.5)}70%{box-shadow:0 0 0 8px rgba(229,72,77,0)}100%{box-shadow:0 0 0 0 rgba(229,72,77,0)}}

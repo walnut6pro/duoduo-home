@@ -22,7 +22,7 @@
   var sessionUser = null;  // 当前登录用户
   var loginShown = false;  // 防止重复弹出登录框
 
-  var STORES = ['food', 'boxes', 'items', 'chores', 'dailies', 'meta'];
+  var STORES = ['food', 'boxes', 'items', 'chores', 'dailies', 'bills', 'meta'];
 
   function id() {
     return Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
