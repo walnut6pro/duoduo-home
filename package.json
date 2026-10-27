@@ -1,0 +1,12 @@
+{
+  "name": "duoduo-home",
+  "version": "1.0.0",
+  "private": true,
+  "description": "多多管家 - 家庭食品保质期/收纳/家务管理 PWA（含轻量共享房间后端）",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

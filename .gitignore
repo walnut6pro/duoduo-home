@@ -7,3 +7,6 @@
 Thumbs.db
 .DS_Store
 node_modules/
+
+# 共享房间运行时数据（由 server.js 生成，含共享快照）
+rooms/

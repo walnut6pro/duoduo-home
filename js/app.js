@@ -3,7 +3,7 @@
  */
 (function () {
   'use strict';
-  var CloudDB = window.CloudDB, HClassify = window.HClassify, HSpeech = window.HSpeech, HShare = window.HShare;
+  var CloudDB = window.CloudDB, HClassify = window.HClassify, HSpeech = window.HSpeech, HShare = window.HShare, HDB = window.HDB;
   var APP_VERSION = '1.0';
 
   var ROOMS = ['厨房', '客厅', '卧室', '卫生间', '书房', '阳台', '储物间'];
@@ -13,7 +13,9 @@
   var state = {
     tab: 'food',
     food: [], boxes: [], items: [], chores: [], dailies: [],
-    remindDays: 7, notifEnabled: false, _notifiedToday: ''
+    remindDays: 7, notifEnabled: false, _notifiedToday: '',
+    shareRoomId: '', shareAuto: false,
+    autoBackup: false, autoBackupDays: 1
   };
 
   /* ---------- 工具 ---------- */
@@ -75,10 +77,19 @@
   function loadAll() {
     return Promise.all([
       CloudDB.getAll('food'), CloudDB.getAll('boxes'), CloudDB.getAll('items'),
-      CloudDB.getAll('chores'), CloudDB.getAll('dailies'), CloudDB.getMeta('remindDays', 7)
+      CloudDB.getAll('chores'), CloudDB.getAll('dailies'), CloudDB.getMeta('remindDays', 7),
+      CloudDB.getMeta('shareRoomId', ''), CloudDB.getMeta('shareAutoPublish', false),
+      CloudDB.getMeta('autoBackup', false), CloudDB.getMeta('autoBackupDays', 0),
+      CloudDB.getMeta('autoBackupMin', 0) // 旧版「分钟」设置，仅用于迁移
     ]).then(function (r) {
       state.food = r[0]; state.boxes = r[1]; state.items = r[2];
       state.chores = r[3]; state.dailies = r[4]; state.remindDays = +r[5] || 7;
+      state.shareRoomId = r[6] || ''; state.shareAuto = !!r[7];
+      state.autoBackup = !!r[8];
+      // 备份间隔统一以「天」为单位；兼容旧版分钟设置（15 分钟 ≈ 1 天）
+      var days = +r[9] || 0;
+      if (!days) { var oldMin = +r[10] || 0; days = oldMin ? Math.max(1, Math.round(oldMin / 1440)) : 1; }
+      state.autoBackupDays = Math.min(365, Math.max(1, days));
     });
   }
 
@@ -165,6 +176,7 @@
       });
       if (!editObj) obj.id = CloudDB.id();
       obj.createdAt = editObj ? editObj.createdAt : Date.now();
+      obj.updatedAt = Date.now();
       return CloudDB.put('food', obj).then(function () { return afterSave(msg); });
     });
   }
@@ -218,6 +230,7 @@
       var obj = Object.assign({}, editObj, { name: v.name, type: v.type, room: v.room, note: v.note });
       if (!editObj) obj.id = CloudDB.id();
       obj.createdAt = editObj ? editObj.createdAt : Date.now();
+      obj.updatedAt = Date.now();
       return CloudDB.put('boxes', obj).then(function () { return afterSave('已保存'); });
     });
   }
@@ -239,6 +252,7 @@
       var obj = Object.assign({}, editObj, { name: v.name, category: v.category || '杂物', room: v.room, boxId: v.boxId || '', quantity: v.quantity, note: v.note });
       if (!editObj) obj.id = CloudDB.id();
       obj.createdAt = editObj ? editObj.createdAt : Date.now();
+      obj.updatedAt = Date.now();
       return CloudDB.put('items', obj).then(function () { return afterSave(msg); });
     });
   }
@@ -383,12 +397,14 @@
       field('截止日期', '<input type="date" name="dueDate" value="' + esc(c.dueDate || '') + '">') +
       '<button class="primary" type="submit">保存</button></form>';
   }
-  function openChoreModal() {
-    openModal('添加家务', choreForm(), function (form) {
+  function openChoreModal(editObj) {
+    openModal(editObj ? '编辑家务' : '添加家务', choreForm(editObj), function (form) {
       var v = formVals(form);
       if (!v.title) { toast('请填写标题'); return false; }
-      var obj = { id: CloudDB.id(), title: v.title, room: v.room, priority: v.priority, dueDate: v.dueDate || '', done: false, doneAt: '', createdAt: Date.now() };
-      return CloudDB.put('chores', obj).then(function () { return afterSave('已添加'); });
+      var obj = editObj ? Object.assign({}, editObj, { title: v.title, room: v.room, priority: v.priority, dueDate: v.dueDate || '' })
+                        : { id: CloudDB.id(), title: v.title, room: v.room, priority: v.priority, dueDate: v.dueDate || '', done: false, doneAt: '', createdAt: Date.now() };
+      obj.updatedAt = Date.now();
+      return CloudDB.put('chores', obj).then(function () { return afterSave('已保存'); });
     });
   }
 
@@ -408,46 +424,39 @@
       '<div class="banner ok">今日已完成 ' + doneCnt + ' / ' + state.dailies.length + ' 项</div>' +
       '<div class="list">' + list + '</div>';
   }
-  function openDailyModal() {
-    openModal('添加每日必做', '<form>' +
-      field('标题', '<input name="title" required placeholder="如：倒垃圾">') +
-      field('备注', '<input name="note" placeholder="选填">') +
+  function openDailyModal(editObj) {
+    var d = editObj || {};
+    openModal(editObj ? '编辑每日必做' : '添加每日必做', '<form>' +
+      field('标题', '<input name="title" required value="' + esc(d.title || '') + '" placeholder="如：倒垃圾">') +
+      field('备注', '<input name="note" value="' + esc(d.note || '') + '" placeholder="选填">') +
       '<button class="primary" type="submit">保存</button></form>', function (form) {
       var v = formVals(form);
       if (!v.title) { toast('请填写标题'); return false; }
-      var obj = { id: CloudDB.id(), title: v.title, note: v.note, createdAt: Date.now(), lastDoneDate: '' };
-      return CloudDB.put('dailies', obj).then(function () { return afterSave('已添加'); });
+      var obj = editObj ? Object.assign({}, editObj, { title: v.title, note: v.note }) : { id: CloudDB.id(), title: v.title, note: v.note, createdAt: Date.now(), lastDoneDate: '' };
+      obj.updatedAt = Date.now();
+      return CloudDB.put('dailies', obj).then(function () { return afterSave('已保存'); });
     });
   }
 
   /* ---------- 视图：我的 ---------- */
-  function cloudCard() {
-    if (CloudDB.mode() !== 'cloud') {
-      return '<div class="card static"><div class="card-main"><div class="card-title">数据存储</div>' +
-        '<div class="card-sub">本机存储（离线可用）· 启用云服务后自动切换云端同步</div></div></div>';
-    }
-    var u = CloudDB.currentUser();
-    if (u) {
-      var name = u.name || u.phone || (u.id ? ('用户 ' + u.id) : '已登录');
-      return '<div class="card static"><div class="card-main"><div class="card-title">云端同步 · 已连接</div>' +
-        '<div class="card-sub">账号：' + esc(name) + '</div></div>' +
-        '<button class="row-act-b" data-act="cloudLogout">退出登录</button></div>';
-    }
-    return '<div class="card tap" data-act="cloudLogin"><div class="card-main"><div class="card-title">云端同步 · 未登录</div>' +
-      '<div class="card-sub">点此手机号登录，开启多端同步</div></div><span class="chev">›</span></div>';
-  }
   function viewMe() {
     var notif = ('Notification' in window) ? (Notification.permission === 'granted' ? '已开启' : '<button class="mini" data-act="enableNotif">开启通知</button>') : '当前浏览器不支持';
     return '<div class="head"><h1>我的</h1></div>' +
       '<div class="list">' +
       '<div class="card static"><div class="card-main"><div class="card-title">应用版本</div><div class="card-sub">多多管家 v' + APP_VERSION + '（PWA）</div></div></div>' +
-      cloudCard() +
-      '<div class="card tap" data-act="shareLink"><div class="card-main"><div class="card-title">共享给家人（生成链接）</div><div class="card-sub">把当前内容打包进链接，对方打开即可看到并合并</div></div><span class="chev">›</span></div>' +
+      '<div class="card static"><div class="card-main"><div class="card-title">👪 家庭实时同步</div><div class="card-sub">已开启 · 每 8 秒自动同步（你和家人打开同一公网链接即可互看实时数据）</div></div><button class="row-act-b" data-act="syncNow">立即同步</button></div>' +
+      '<div class="card static stack"><div class="card-main"><div class="card-title">📥 自动本地备份</div><div class="card-sub">每 ' + state.autoBackupDays + ' 天自动把数据存到本机（防平台数据丢失）</div></div>' +
+        '<div class="row-act">' +
+        '<button class="row-act-b wide" data-act="toggleAutoBackup">' + (state.autoBackup ? '● 已开启' : '○ 未开启') + '</button>' +
+        '<button class="row-act-b" data-act="setAutoBackup">间隔 ' + state.autoBackupDays + ' 天</button>' +
+        '<button class="row-act-b" data-act="backupNow">立即备份</button>' +
+        '<button class="row-act-b" data-act="exportLatestBackup">导出文件</button>' +
+        '<button class="row-act-b" data-act="restoreBackup">恢复最近</button>' +
+        '</div></div>' +
       '<div class="card static"><div class="card-main"><div class="card-title">默认提前提醒</div><div class="card-sub">食品临期提前 ' + state.remindDays + ' 天提醒</div></div><button class="row-act-b" data-act="setRemind">设置</button></div>' +
       '<div class="card static"><div class="card-main"><div class="card-title">过期提醒通知</div><div class="card-sub">' + notif + '</div></div></div>' +
       '<div class="card tap" data-act="exportData"><div class="card-main"><div class="card-title">数据备份（导出）</div><div class="card-sub">导出 JSON 文件，换手机/重装可恢复</div></div><span class="chev">›</span></div>' +
       '<div class="card tap" data-act="importData"><div class="card-main"><div class="card-title">数据恢复（导入）</div><div class="card-sub">从备份文件恢复数据</div></div><span class="chev">›</span></div>' +
-      '<div class="card tap" data-act="howto"><div class="card-main"><div class="card-title">如何添加到主屏幕</div><div class="card-sub">iPhone Safari 打开 → 分享 → 添加到主屏幕</div></div><span class="chev">›</span></div>' +
       '<div class="card danger tap" data-act="clearAll"><div class="card-main"><div class="card-title">清空全部数据</div><div class="card-sub">删除本机所有记录（不可恢复）</div></div><span class="chev">›</span></div>' +
       '</div>';
   }
@@ -463,7 +472,69 @@
     return loadAll().then(function () {
       render(); checkReminders();
       if (msg) toast(msg);
+    }).then(function () {
+      pushLocalAll();
+      if (state.shareAuto && state.shareRoomId) publishRoomSilently(state.shareRoomId);
     });
+  }
+
+  /* ---------- 家庭实时同步（共享数据表，双向） ---------- */
+  var SYNC_TYPES = ['food', 'boxes', 'items', 'chores', 'dailies'];
+  var SYNC_PULL_MS = 8000;
+  var _syncTimer = null;
+  function upsertLocal(type, it) {
+    var arr = state[type] || (state[type] = []);
+    var i = arr.findIndex(function (x) { return x.id === it.id; });
+    if (i >= 0) arr[i] = it; else arr.push(it);
+  }
+  // 把本地所有数据增量推送到云端共享库（按 updatedAt last-write-wins，不会错误覆盖对方较新的内容）
+  function pushLocalAll() {
+    var changes = [];
+    SYNC_TYPES.forEach(function (type) {
+      (state[type] || []).forEach(function (it) {
+        if (!it || !it.id) return;
+        var u = it.updatedAt || it.createdAt || Date.now();
+        changes.push({ type: type, op: 'upsert', updatedAt: u, item: Object.assign({}, it, { updatedAt: u }) });
+      });
+    });
+    return HShare.pushChanges(changes);
+  }
+  // 本地删除某条后，立即把删除传播到云端
+  function syncPushDelete(type, id) {
+    return HShare.pushChanges([{ type: type, op: 'delete', id: id, updatedAt: Date.now() }]);
+  }
+  // 从云端拉取并合并到本地（更新较新项、应用删除）
+  function pullAndMerge() {
+    return HShare.pullShared().then(function (j) {
+      if (!j || j._error) return;
+      var changed = false;
+      SYNC_TYPES.forEach(function (type) {
+        (j.data[type] || []).forEach(function (it) {
+          var local = (state[type] || []).find(function (x) { return x.id === it.id; });
+          if (!local || (local.updatedAt || local.createdAt || 0) < (it.updatedAt || 0)) {
+            upsertLocal(type, it); CloudDB.put(type, it); changed = true;
+          }
+        });
+      });
+      (j.deleted || []).forEach(function (d) {
+        if (!d.type) return;
+        var arr = state[d.type] || [];
+        var local = arr.find(function (x) { return x.id === d.id; });
+        if (local && (local.updatedAt || local.createdAt || 0) < d.t) {
+          state[d.type] = arr.filter(function (x) { return x.id !== d.id; });
+          CloudDB.del(d.type, d.id); changed = true;
+        }
+      });
+      if (changed) { render(); checkReminders(); }
+    });
+  }
+  // 启动：先拉云端（拿到家人已有数据），再推本地（初始化或补上自己独有数据），之后定时拉取
+  function initSync() {
+    pullAndMerge().then(function () { return pushLocalAll(); }).then(function () { startAutoSync(); });
+  }
+  function startAutoSync() {
+    if (_syncTimer) return;
+    _syncTimer = setInterval(function () { pullAndMerge(); }, SYNC_PULL_MS);
   }
 
   /* ---------- 渲染 ---------- */
@@ -535,7 +606,7 @@
         CloudDB.get('boxes', id).then(function (b) {
           if (!confirm('确定删除收纳盒“' + (b ? b.name : '') + '”吗？其下属物项的“收纳于”会置空。')) return;
           Promise.all(state.items.filter(function (i) { return i.boxId === id; }).map(function (i) { i.boxId = ''; return CloudDB.put('items', i); }))
-            .then(function () { return CloudDB.del('boxes', id); }).then(function () { afterSave(); toast('已删除'); });
+            .then(function () { return CloudDB.del('boxes', id); }).then(function () { syncPushDelete('boxes', id); afterSave(); toast('已删除'); });
         });
         break;
       case 'addItem': openItemModal(null, null, '已保存'); break;
@@ -564,7 +635,7 @@
           var fobj = {
             id: CloudDB.id(), name: lastParse.name, category: lastParse.cat, room: lastParse.room,
             boxId: pickedVoiceBox(), quantity: '', unit: '', purchaseDate: today(),
-            expiryDate: expDate, remindDays: state.remindDays, note: '', createdAt: Date.now()
+            expiryDate: expDate, remindDays: state.remindDays, note: '', createdAt: Date.now(), updatedAt: Date.now()
           };
           CloudDB.put('food', fobj).then(function () {
             return afterSave('已添加「' + fobj.name + '」，保质期至 ' + expDate);
@@ -597,7 +668,17 @@
       case 'enableNotif':
         if ('Notification' in window) Notification.requestPermission().then(function (p) { toast('通知权限：' + p); render(); });
         break;
+      case 'syncNow': pullAndMerge().then(function () { toast('已同步'); }); break;
+      case 'toggleAutoBackup':
+        state.autoBackup = !state.autoBackup;
+        CloudDB.setMeta('autoBackup', state.autoBackup); startAutoBackup(); render();
+        toast(state.autoBackup ? '已开启自动备份' : '已关闭自动备份'); break;
+      case 'setAutoBackup': openAutoBackupModal(); break;
+      case 'backupNow': saveLocalBackup().then(function () { toast('已备份到本机'); }); break;
+      case 'exportLatestBackup': exportLatestBackup(); break;
+      case 'restoreBackup': restoreBackup(); break;
       case 'shareLink': openShareModal(); break;
+      case 'openSearch': openSearchModal(); break;
       case 'exportData': exportData(); break;
       case 'importData': importData(); break;
       case 'howto': showHowto(); break;
@@ -615,7 +696,7 @@
   }
   function confirmDel(store, id, label) {
     if (!confirm('确定删除该' + label + '吗？')) return;
-    CloudDB.del(store, id).then(function () { afterSave(); toast('已删除'); });
+    CloudDB.del(store, id).then(function () { syncPushDelete(store, id); afterSave(); toast('已删除'); });
   }
 
   function openRemindModal() {
@@ -722,27 +803,44 @@
       ' · 每日必做 ' + (s.dailies || []).length;
   }
   function openShareModal() {
-    var payload = { food: state.food, boxes: state.boxes, items: state.items, chores: state.chores, dailies: state.dailies };
+    var payload = currentPayload();
     var total = HShare.count(payload);
     if (!total) { toast('还没有可共享的内容'); return; }
-    HShare.buildLink(payload).then(function (link) {
+    ensureRoom().then(function (rid) {
+      var roomLink = location.origin + location.pathname + '#room=' + rid;
+      var auto = !!state.shareAuto;
       openModal('共享给家人', '<div class="sharebox">' +
-        '<p class="shint">本次共享 <b>' + total + '</b> 条：' + shareCountsHTML(state) + '</p>' +
-        '<textarea id="shareLink" readonly rows="4">' + esc(link) + '</textarea>' +
-        '<div class="row-act" style="margin-top:10px"><button data-act="copyShare">复制链接</button>' +
-        (navigator.share ? '<button data-act="sysShare">系统分享</button>' : '') + '</div>' +
-        '<p class="shint">对方用 <b>Safari</b> 打开该链接，即可看到这些内容并选择「合并到我的数据」。链接携带的是<b>此刻的数据快照</b>；对方合并后可再生成新链接继续分享。</p>' +
-        (link.length > 60000 ? '<p class="shint warn">内容较多、链接较长（' + link.length + ' 字符），个别聊天软件可能截断，建议用系统分享。</p>' : '') +
+        '<div class="ssec-h">方式一 · 实时共享房间（推荐）</div>' +
+        '<p class="shint">对方打开下方链接即可查看你的最新数据；开启自动发布后，你每次修改都会自动同步，无需重发。</p>' +
+        '<textarea id="shareRoom" readonly rows="3">' + esc(roomLink) + '</textarea>' +
+        '<label class="f" style="margin-top:10px"><input type="checkbox" id="autoPub"' + (auto ? ' checked' : '') + '> 自动发布（数据变更时同步）</label>' +
+        '<div class="row-act" style="margin-top:8px">' +
+        '<button data-act="copyRoom">复制房间链接</button>' +
+        (navigator.share ? '<button data-act="sysShareRoom">系统分享</button>' : '') +
+        '<button data-act="publishRoom">发布 / 更新</button></div>' +
+        '<div class="ssec-h" style="margin-top:16px">本次将分享的内容（只读预览）</div>' +
+        sharedReadOnlyHTML(payload) +
+        '<div class="divider">或</div>' +
+        '<div class="ssec-h">方式二 · 离线快照链接</div>' +
+        '<p class="shint">无需服务器，把数据打包进链接（此刻快照），对方打开即可看。</p>' +
+        '<div class="row-act"><button data-act="makeSnapshot">生成离线链接</button></div>' +
         '</div>', function () { return false; });
-      var cp = document.getElementById('copyShare');
-      if (cp) cp.onclick = function () {
-        HShare.copyText(link).then(function (ok) { toast(ok ? '链接已复制' : '复制失败，请长按手动选择'); });
+      var cp = document.getElementById('copyRoom');
+      if (cp) cp.onclick = function () { HShare.copyText(roomLink).then(function (ok) { toast(ok ? '房间链接已复制' : '复制失败，请长按手动选择'); }); };
+      var sy = document.getElementById('sysShareRoom');
+      if (sy) sy.onclick = function () { navigator.share({ title: '多多管家 · 家庭共享', text: '一起管理家里的食品保质期和收纳（实时更新）', url: roomLink }).catch(function () {}); };
+      var pb = document.getElementById('publishRoom');
+      if (pb) pb.onclick = function () { publishRoomNow(rid); };
+      var ap = document.getElementById('autoPub');
+      if (ap) ap.onchange = function () {
+        state.shareAuto = ap.checked;
+        CloudDB.setMeta('shareAutoPublish', ap.checked).then(function () {
+          toast(ap.checked ? '已开启自动发布' : '已关闭自动发布');
+          if (ap.checked) publishRoomNow(rid);
+        });
       };
-      var sy = document.getElementById('sysShare');
-      if (sy) sy.onclick = function () {
-        navigator.share({ title: '多多管家 · 家庭数据', text: '一起管理家里的食品保质期和收纳（共 ' + total + ' 条）', url: link })
-          .catch(function () {});
-      };
+      var ms = document.getElementById('makeSnapshot');
+      if (ms) ms.onclick = function () { showSnapshotLink(payload, total); };
     });
   }
   // 合并共享内容：按 id 去重，不覆盖本地已有数据
@@ -762,13 +860,59 @@
     });
     return Promise.all(tasks).then(function () { return added; });
   }
+  // 只读渲染共享内容（家人打开链接后直接查看，无需先合并）
+  function sharedReadOnlyHTML(d) {
+    var boxMap = {};
+    (d.boxes || []).forEach(function (b) { boxMap[b.id] = b; });
+    function sec(icon, title, rows) {
+      if (!rows.length) return '';
+      return '<div class="ssec"><div class="ssec-h">' + icon + ' ' + esc(title) + '（' + rows.length + '）</div><ul class="slist">' + rows.join('') + '</ul></div>';
+    }
+    var food = (d.food || []).slice().sort(function (a, b) { return (a.expiryDate || '').localeCompare(b.expiryDate || ''); })
+      .map(function (f) {
+        var st = foodStatus(f);
+        var meta = [f.category, f.room, (f.quantity ? (f.quantity + (f.unit || '')) : '')].filter(Boolean).join(' · ');
+        return '<li class="srow"><div class="sname">' + esc(f.name || '未命名') + '</div>' +
+          (meta ? '<div class="smeta">' + esc(meta) + '</div>' : '') +
+          (f.expiryDate ? '<div class="smeta st-' + st.cls + '">📅 ' + esc(f.expiryDate) + '（' + st.txt + '）</div>' : '');
+      });
+    var boxes = (d.boxes || []).map(function (b) {
+      var items = (d.items || []).filter(function (i) { return i.boxId === b.id; });
+      var sub = [b.type, b.room].filter(Boolean).join(' · ');
+      var inner = (b.note ? '<div class="smeta">' + esc(b.note) + '</div>' : '') +
+        (items.length ? '<div class="smeta">内含：' + esc(items.map(function (i) { return i.name; }).join('、')) + '</div>' : '');
+      return '<li class="srow"><div class="sname">📦 ' + esc(b.name || '未命名') + '</div>' +
+        (sub ? '<div class="smeta">' + esc(sub) + '</div>' : '') + inner + '</li>';
+    });
+    var items = (d.items || []).filter(function (i) { return !i.boxId || !boxMap[i.boxId]; })
+      .map(function (i) {
+        var meta = [i.category, i.room, (i.boxId && boxMap[i.boxId] ? ('属 ' + boxMap[i.boxId].name) : '')].filter(Boolean).join(' · ');
+        return '<li class="srow"><div class="sname">' + esc(i.name || '未命名') + '</div>' +
+          (meta ? '<div class="smeta">' + esc(meta) + '</div>' : '') +
+          (i.note ? '<div class="smeta">' + esc(i.note) + '</div>' : '');
+      });
+    var chores = (d.chores || []).map(function (c) {
+      var meta = [c.room, c.priority, (c.done ? '已完成' : '待办')].filter(Boolean).join(' · ');
+      return '<li class="srow"><div class="sname">' + esc(c.title || '未命名') + '</div>' +
+        (meta ? '<div class="smeta">' + esc(meta) + '</div>' : '') +
+        (c.dueDate ? '<div class="smeta">截止 ' + esc(c.dueDate) + '</div>' : '');
+    });
+    var dailies = (d.dailies || []).map(function (x) {
+      return '<li class="srow"><div class="sname">' + esc(x.title || '未命名') + '</div>' +
+        (x.note ? '<div class="smeta">' + esc(x.note) + '</div>' : '');
+    });
+    return sec('🥫', '食品保质期', food) + sec('📦', '收纳盒', boxes) + sec('🧺', '零散物项', items) +
+      sec('✅', '家务', chores) + sec('📅', '每日必做', dailies);
+  }
   function showIncomingShare(data) {
     var total = HShare.count(data);
-    openModal('收到共享内容', '<div class="sharebox">' +
-      '<p class="shint">这个链接里包含 <b>' + total + '</b> 条家庭数据：' + shareCountsHTML(data, '') + '</p>' +
-      '<div class="row-act" style="margin-top:10px">' +
-      '<button data-act="doMergeShare">合并到我的数据</button><button data-act="laterShare">暂不</button></div>' +
-      '<p class="shint">合并会跳过你本地已有的重复条目，不会覆盖现有数据。</p>' +
+    openModal('家人共享内容（只读）', '<div class="sharebox">' +
+      '<p class="shint">以下是家人分享的 <b>' + total + '</b> 条家庭数据，可直接查看（只读）：' + shareCountsHTML(data, '') + '</p>' +
+      sharedReadOnlyHTML(data) +
+      '<div class="row-act" style="margin-top:14px">' +
+      '<button data-act="laterShare">关闭</button>' +
+      '<button data-act="doMergeShare">合并到我的数据</button></div>' +
+      '<p class="shint">若想把这些内容存入你自己的多多管家，点「合并到我的数据」即可（会跳过已有重复项，不覆盖现有数据）。</p>' +
       '</div>', function () { return false; });
     var mb = document.getElementById('doMergeShare');
     if (mb) mb.onclick = function () {
@@ -778,7 +922,124 @@
       });
     };
     var lb = document.getElementById('laterShare');
-    if (lb) lb.onclick = function () { closeModal(); HShare.clearHash(); toast('已忽略，可再次打开原链接合并'); };
+    if (lb) lb.onclick = function () { closeModal(); HShare.clearHash(); toast('已关闭预览'); };
+  }
+
+  /* ---------- 共享房间（方案 B）辅助 ---------- */
+  function currentPayload() {
+    return { food: state.food, boxes: state.boxes, items: state.items, chores: state.chores, dailies: state.dailies };
+  }
+  function ensureRoom() {
+    if (state.shareRoomId) return Promise.resolve(state.shareRoomId);
+    var rid = HShare.genRoomId();
+    return CloudDB.setMeta('shareRoomId', rid).then(function () { state.shareRoomId = rid; return rid; });
+  }
+  function publishRoomNow(rid, silent) {
+    return HShare.publishRoom(rid, currentPayload()).then(function () {
+      if (!silent) toast('已发布到共享房间');
+    }).catch(function (e) {
+      toast('发布失败：' + (e && e.message || '网络错误'));
+    });
+  }
+  function publishRoomSilently(rid) {
+    HShare.publishRoom(rid, currentPayload()).catch(function (e) { console.warn('自动发布失败', e); });
+  }
+  function showSnapshotLink(payload, total) {
+    HShare.buildLink(payload).then(function (link) {
+      openModal('离线快照链接', '<div class="sharebox">' +
+        '<p class="shint">本次快照 <b>' + total + '</b> 条，已打包进下方链接（此刻数据）。</p>' +
+        '<textarea id="shareLink" readonly rows="4">' + esc(link) + '</textarea>' +
+        '<div class="row-act" style="margin-top:10px"><button data-act="copyShare">复制链接</button>' +
+        (navigator.share ? '<button data-act="sysShare">系统分享</button>' : '') + '</div>' +
+        (link.length > 60000 ? '<p class="shint warn">内容较多、链接较长（' + link.length + ' 字符），个别聊天软件可能截断，建议用系统分享。</p>' : '') +
+        '</div>', function () { return false; });
+      var cp = document.getElementById('copyShare');
+      if (cp) cp.onclick = function () { HShare.copyText(link).then(function (ok) { toast(ok ? '链接已复制' : '复制失败，请长按'); }); };
+      var sy = document.getElementById('sysShare');
+      if (sy) sy.onclick = function () { navigator.share({ title: '多多管家 · 家庭数据', text: '一起管理家里的食品保质期和收纳（共 ' + total + ' 条）', url: link }).catch(function () {}); };
+    });
+  }
+  // 家人打开 #room= 链接：只读实时视图（刷新 / 合并 / 关闭）
+  function showRoomView(rid) {
+    openModal('家人共享内容（实时）', '<div class="sharebox">' +
+      '<p class="shint" id="roomStatus">正在加载共享数据…</p><div id="roomBody"></div></div>', function () { return false; });
+    renderRoom(rid);
+  }
+  function renderRoom(rid) {
+    var st = document.getElementById('roomStatus');
+    var body = document.getElementById('roomBody');
+    HShare.fetchRoom(rid).then(function (res) {
+      if (!res) { if (st) st.textContent = '该共享房间还没有内容，或链接已失效。'; if (body) body.innerHTML = ''; return; }
+      if (res._error) { if (st) st.textContent = res._error; if (body) body.innerHTML = ''; return; }
+      if (st) st.textContent = '更新于 ' + new Date(res.updatedAt || Date.now()).toLocaleString();
+      if (body) body.innerHTML = sharedReadOnlyHTML(res.data) +
+        '<div class="row-act" style="margin-top:14px">' +
+        '<button data-act="refreshRoom">刷新</button>' +
+        '<button data-act="doMergeShare">合并到我的数据</button>' +
+        '<button data-act="closeRoom">关闭</button></div>' +
+        '<p class="shint">这是对方实时发布的只读内容；点「刷新」获取最新。合并会跳过你本地已有的重复项。</p>';
+      var rf = document.getElementById('refreshRoom');
+      if (rf) rf.onclick = function () { renderRoom(rid); };
+      var cl = document.getElementById('closeRoom');
+      if (cl) cl.onclick = closeModal;
+      var mg = document.getElementById('doMergeShare');
+      if (mg) mg.onclick = function () { mergeShared(res.data).then(function (n) { closeModal(); afterSave(n ? ('已合并 ' + n + ' 条') : '这些内容你本地已经有了'); }); };
+    }).catch(function (e) {
+      if (st) st.textContent = '读取失败：' + (e && e.message || '网络错误');
+    });
+  }
+
+  /* ---------- 全局搜索 ---------- */
+  function runSearch(q) {
+    q = (q || '').trim().toLowerCase();
+    if (!q) return [];
+    var m = [];
+    function scan(store, type, label, nameOf, extra) {
+      (state[store] || []).forEach(function (o) {
+        var hay = [nameOf(o), extra ? extra(o) : '', o.note || '', o.room || ''].join(' ').toLowerCase();
+        if (hay.indexOf(q) >= 0) m.push({ type: type, label: label, store: store, id: o.id, name: nameOf(o), sub: extra ? extra(o) : '' });
+      });
+    }
+    scan('food', 'food', '食品', function (o) { return o.name; }, function (o) { return [o.category, o.room, o.expiryDate].filter(Boolean).join(' · '); });
+    scan('boxes', 'box', '收纳盒', function (o) { return o.name; }, function (o) { return [o.type, o.room].filter(Boolean).join(' · '); });
+    scan('items', 'item', '物项', function (o) { return o.name; }, function (o) { return [o.category, o.room].filter(Boolean).join(' · '); });
+    scan('chores', 'chore', '家务', function (o) { return o.title; }, function (o) { return [o.room, o.priority, (o.done ? '已完成' : '待办')].filter(Boolean).join(' · '); });
+    scan('dailies', 'daily', '每日必做', function (o) { return o.title; }, function (o) { return o.note || ''; });
+    return m;
+  }
+  function openSearchModal() {
+    openModal('全局搜索', '<div class="sharebox">' +
+      '<input id="searchInput" class="sinput" placeholder="搜索食品 / 收纳 / 家务 / 每日必做…" autofocus>' +
+      '<div id="searchResults"></div></div>', function () { return false; });
+    var si = document.getElementById('searchInput');
+    if (si) {
+      si.oninput = function () { renderSearchResults(si.value); };
+      renderSearchResults('');
+      setTimeout(function () { try { si.focus(); } catch (e) {} }, 60);
+    }
+  }
+  function renderSearchResults(q) {
+    var box = document.getElementById('searchResults');
+    if (!box) return;
+    var m = runSearch(q);
+    if (!q || !q.trim()) { box.innerHTML = '<p class="shint">输入关键词，跨「食品 / 收纳 / 家务 / 每日必做」搜索。</p>'; return; }
+    if (!m.length) { box.innerHTML = '<p class="shint">没有找到匹配「' + esc(q.trim()) + '」的内容。</p>'; return; }
+    box.innerHTML = '<ul class="slist">' + m.map(function (x) {
+      return '<li class="srow tap" data-jump="1" data-type="' + x.type + '" data-id="' + esc(x.id) + '">' +
+        '<div class="sname">' + esc(x.name) + ' <span class="smeta">' + esc(x.label) + '</span></div>' +
+        (x.sub ? '<div class="smeta">' + esc(x.sub) + '</div>' : '') + '</li>';
+    }).join('') + '</ul>';
+    $all('#searchResults [data-jump]').forEach(function (el) {
+      el.onclick = function () { jumpSearch(el.getAttribute('data-type'), el.getAttribute('data-id')); };
+    });
+  }
+  function jumpSearch(type, id) {
+    closeModal();
+    if (type === 'food') { state.tab = 'food'; render(); CloudDB.get('food', id).then(function (o) { if (o) openFoodModal(null, o, '已保存'); }); }
+    else if (type === 'box') { state.tab = 'storage'; storageSub = 'boxes'; render(); CloudDB.get('boxes', id).then(function (o) { if (o) openBoxModal(o); }); }
+    else if (type === 'item') { state.tab = 'storage'; storageSub = 'items'; render(); CloudDB.get('items', id).then(function (o) { if (o) openItemModal(null, o, '已保存'); }); }
+    else if (type === 'chore') { state.tab = 'chores'; render(); CloudDB.get('chores', id).then(function (o) { if (o) openChoreModal(o); }); }
+    else if (type === 'daily') { state.tab = 'dailies'; render(); CloudDB.get('dailies', id).then(function (o) { if (o) openDailyModal(o); }); }
   }
 
   function exportData() {
@@ -812,6 +1073,68 @@
     };
     inp.click();
   }
+
+  /* ---------- 自动本地备份（防平台数据丢失） ---------- */
+  var _backupTimer = null;
+  function backupSnapshotData() {
+    return { food: state.food, boxes: state.boxes, items: state.items, chores: state.chores, dailies: state.dailies };
+  }
+  // 把当前（已合并云端）数据存一份带时间戳的快照到本机 IndexedDB，仅保留最近 30 份
+  function saveLocalBackup() {
+    var snap = { id: Date.now(), ts: new Date().toISOString(), data: backupSnapshotData() };
+    return HDB.put('backups', snap).then(function () {
+      return HDB.getAll('backups').then(function (arr) {
+        if (arr.length > 30) {
+          arr.sort(function (a, b) { return b.id - a.id; });
+          return Promise.all(arr.slice(30).map(function (x) { return HDB.del('backups', x.id); }));
+        }
+      });
+    }).catch(function () { /* 备份失败静默忽略，不影响使用 */ });
+  }
+  function startAutoBackup() {
+    if (_backupTimer) { clearInterval(_backupTimer); _backupTimer = null; }
+    if (!state.autoBackup) return;
+    saveLocalBackup();
+    _backupTimer = setInterval(saveLocalBackup, Math.max(1, state.autoBackupDays) * 86400000);
+  }
+  function listBackups() {
+    return HDB.getAll('backups').then(function (arr) { arr.sort(function (a, b) { return b.id - a.id; }); return arr; });
+  }
+  function exportLatestBackup() {
+    listBackups().then(function (arr) {
+      if (!arr.length) { toast('暂无备份'); return; }
+      var snap = arr[0];
+      var blob = new Blob([JSON.stringify({ app: 'duoduo-home', version: APP_VERSION, exportedAt: snap.ts, data: snap.data }, null, 2)], { type: 'application/json' });
+      var a = document.createElement('a'); a.href = URL.createObjectURL(blob);
+      a.download = '多多管家自动备份_' + today() + '.json'; a.click();
+      setTimeout(function () { URL.revokeObjectURL(a.href); }, 1000);
+      toast('已导出最新备份');
+    });
+  }
+  function restoreBackup() {
+    listBackups().then(function (arr) {
+      if (!arr.length) { toast('暂无备份'); return; }
+      var snap = arr[0];
+      if (!confirm('将用最近一份备份（' + snap.ts + '）覆盖当前数据并同步到云端，确定继续？')) return;
+      var tasks = [];
+      SYNC_TYPES.forEach(function (k) { (snap.data[k] || []).forEach(function (o) { tasks.push(CloudDB.put(k, o)); }); });
+      Promise.all(tasks).then(function () { return afterSave(); }).then(function () { return pushLocalAll(); })
+        .then(function () { toast('已从备份恢复'); });
+    });
+  }
+  function openAutoBackupModal() {
+    openModal('备份间隔（天）',
+      '<form><label class="f"><span>自动备份间隔（天，1–365）</span>' +
+      '<input type="number" name="days" min="1" max="365" value="' + state.autoBackupDays + '"></label>' +
+      '<button class="primary" type="submit">保存</button></form>',
+      function (form) {
+        var v = parseInt(formVals(form).days, 10);
+        if (!v || v < 1) { toast('请输入有效天数'); return false; }
+        v = Math.min(365, v);
+        state.autoBackupDays = v; CloudDB.setMeta('autoBackupDays', v); startAutoBackup(); render();
+        toast('已设置每 ' + v + ' 天备份'); return true;
+      });
+  }
   function showHowto() {
     openModal('添加到主屏幕（iPhone）',
       '<div class="howto"><ol>' +
@@ -839,11 +1162,20 @@
     CloudDB.open().then(function () { return loadAll(); }).then(function () {
       render();
       checkReminders();
+      initSync(); // 首次：先拉云端、再推本地，之后每 8 秒自动拉取
+      startAutoBackup(); // 按设置定时把数据快照存到本机
       setInterval(checkReminders, 60000); // 每 60 秒复检提醒
+      // App 切到后台或被关闭时立即存一份备份，保证「按天备份」在平时也生效
+      document.addEventListener('visibilitychange', function () {
+        if (document.visibilityState === 'hidden') saveLocalBackup();
+      });
+      window.addEventListener('pagehide', function () { saveLocalBackup(); });
       // 链接里若带有共享内容，提示是否合并
       return HShare.readFromUrl();
     }).then(function (shared) {
-      if (shared && HShare.has(shared)) showIncomingShare(shared);
+      if (shared && HShare.has(shared)) { showIncomingShare(shared); return; }
+      var rid = HShare.roomFromUrl();
+      if (rid) showRoomView(rid);
     }).catch(function (e) {
       if (e && e.needLogin) return; // 已弹出登录框，无需报错
       toast('初始化失败：' + (e && e.message || e));

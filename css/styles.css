@@ -39,7 +39,7 @@ body{
 .card-title{font-size:16px;font-weight:600;display:flex;align-items:center;gap:6px;flex-wrap:wrap}
 .card-sub{font-size:13px;color:var(--sub);margin-top:3px}
 .card-side{display:flex;flex-direction:column;align-items:flex-end;gap:8px;flex-shrink:0}
-.row-act{display:flex;gap:6px}
+.row-act{display:flex;gap:6px;flex-wrap:wrap}
 .row-act button{background:#f1f4f9;border:none;color:var(--primary);border-radius:8px;
   padding:6px 10px;font-size:13px;cursor:pointer}
 .row-act button:active{background:#e3e9f5}
@@ -119,6 +119,13 @@ body{
 /* 共享弹窗 */
 .sharebox .shint{font-size:13px;color:var(--sub);margin:0 0 10px;line-height:1.6}
 .sharebox .shint.warn{color:#9a6b00;background:#fff4e1;border-radius:8px;padding:8px 10px}
+.ssec{margin-top:6px}
+.ssec-h{font-size:14px;font-weight:700;color:var(--text);margin:14px 0 8px;opacity:.92}
+.slist{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:8px}
+.srow{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:10px 12px}
+.sname{font-size:15px;font-weight:600;color:var(--text)}
+.smeta{font-size:12.5px;color:var(--sub);margin-top:3px;line-height:1.5}
+.st-exp{color:var(--exp)}.st-warn{color:var(--warn)}.st-ok{color:var(--ok)}
 .sharebox textarea{width:100%;border:1px solid var(--line);border-radius:10px;padding:10px;
   font-size:12px;line-height:1.5;background:#f7f9fc;color:var(--text);resize:vertical}
 
@@ -129,6 +136,14 @@ body{
 .chev{color:#c4ccda;font-size:22px;margin-left:auto;padding-left:10px}
 .mini{background:var(--primary);color:#fff;border:none;border-radius:8px;padding:5px 12px;font-size:13px;cursor:pointer;margin-left:8px}
 .card.danger .card-title{color:var(--exp)}
+/* 竖排卡片（如「自动本地备份」）：标题独占一行，按钮整行网格排布
+ * 避免横向 flex 卡片里按钮被挤压、溢出压字造成的「乱码」观感 */
+.card.stack{flex-direction:column;align-items:stretch;gap:10px}
+.card.stack .row-act{width:100%;display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
+.card.stack .row-act button{width:100%;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+  padding:9px 4px;font-size:13px;text-align:center;line-height:1.4}
+.card.stack .row-act .wide{grid-column:span 2}
+@media (max-width:360px){.card.stack .row-act{grid-template-columns:repeat(2,1fr)}}
 
 /* 模态底部弹窗 */
 .modal{position:fixed;inset:0;background:rgba(20,28,46,.45);display:none;align-items:flex-end;z-index:50}
@@ -139,7 +154,7 @@ body{
 .sheet-head{display:flex;align-items:center;justify-content:space-between;padding:16px 18px;
   font-weight:700;font-size:17px;border-bottom:1px solid var(--line)}
 .sheet-head .x{background:none;border:none;font-size:18px;color:var(--sub);cursor:pointer}
-.sheet-body{padding:16px 18px 26px;overflow-y:auto}
+.sheet-body{padding:16px 18px 12px;overflow-y:auto;-webkit-overflow-scrolling:touch}
 
 .f{display:block;margin-bottom:14px}
 .f>span{display:block;font-size:13px;color:var(--sub);margin-bottom:6px}
@@ -148,7 +163,9 @@ body{
 .f select{background:#fff url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='12' height='8'><path d='M1 1l5 5 5-5' stroke='%238a93a6' fill='none' stroke-width='2'/></svg>") no-repeat right 12px center}
 .grid2{display:grid;grid-template-columns:1fr 1fr;gap:12px}
 .primary{width:100%;background:var(--primary);color:#fff;border:none;border-radius:12px;padding:13px;
-  font-size:16px;font-weight:600;margin-top:6px;cursor:pointer}
+  font-size:16px;font-weight:600;margin-top:18px;cursor:pointer;
+  position:sticky;bottom:0;z-index:3;
+  box-shadow:0 -16px 16px -10px #fff,0 2px 6px rgba(0,0,0,.06)}
 .primary:active{background:var(--primary-d)}
 
 .howto{font-size:14px;line-height:1.7}
@@ -170,3 +187,11 @@ body{
 .nav .ic{font-size:20px;line-height:1}
 .nav button.on{color:var(--primary)}
 .nav button.on .ic{transform:translateY(-1px)}
+
+/* 顶部搜索条 */
+#topbar{padding:10px 14px 4px;background:var(--bg)}
+.search-trigger{width:100%;text-align:left;background:var(--card);border:1px solid var(--line);border-radius:12px;padding:10px 14px;font-size:14px;color:var(--sub);cursor:pointer;box-shadow:var(--shadow)}
+.search-trigger:active{background:#f3f6fc}
+.sinput{width:100%;border:1px solid var(--line);border-radius:10px;padding:11px 12px;font-size:15px;margin-bottom:10px;background:#fff;color:var(--text)}
+.slist .srow.tap{cursor:pointer}
+.slist .srow.tap:active{background:#f3f6fc}

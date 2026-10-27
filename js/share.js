@@ -136,8 +136,100 @@
     } catch (e) { return false; }
   }
 
+  /* ---------- 共享房间（方案 B：轻量后端，实时/可更新） ---------- */
+  function genRoomId() {
+    var s = '';
+    try {
+      var a = new Uint8Array(9);
+      (global.crypto || { getRandomValues: function () {} }).getRandomValues(a);
+      s = Array.prototype.map.call(a, function (b) { return (b % 36).toString(36); }).join('');
+    } catch (e) {}
+    if (!s || s.length < 6) s = Date.now().toString(36) + Math.random().toString(36).slice(2, 10);
+    return s.replace(/[^a-z0-9_-]/g, '0').slice(0, 16);
+  }
+  function roomFromUrl() {
+    var m = location.hash.match(/[#&]room=([A-Za-z0-9_-]+)/);
+    return m ? m[1] : null;
+  }
+  // 发布平台（WorkBuddy「发布为应用」）对全站（含 /api/）要求带 ?sharecode 访问凭证，
+  // 否则返回「链接不完整」拦截页。这里把 sharecode 从地址栏取出并附加到房间 API 请求，
+  // 同时缓存到 localStorage，保证 PWA 从主屏幕冷启动时也能正确同步房间。
+  function getShareCode() {
+    try {
+      var m = location.search.match(/[?&]sharecode=([^&]+)/);
+      var sc = m ? decodeURIComponent(m[1]) : '';
+      if (sc) { try { localStorage.setItem('dd_sharecode', sc); } catch (e) {} return sc; }
+      try { return localStorage.getItem('dd_sharecode') || ''; } catch (e) { return ''; }
+    } catch (e) { return ''; }
+  }
+  function roomApiUrl(id) {
+    var u = location.origin + '/api/room/' + encodeURIComponent(id);
+    var sc = getShareCode();
+    if (sc) u += '?sharecode=' + encodeURIComponent(sc);
+    return u;
+  }
+  // 发布：把当前数据（compact 精简）上传到共享房间
+  function publishRoom(roomId, data) {
+    return fetch(roomApiUrl(roomId), {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ data: compact(data), updatedAt: Date.now() })
+    }).then(function (r) {
+      if (!r.ok) throw new Error('服务器返回 ' + r.status);
+      return r.json();
+    });
+  }
+  // 读取：从共享房间拉取并展开为完整对象；404→null；网络不通→{_error}
+  function fetchRoom(roomId) {
+    return fetch(roomApiUrl(roomId))
+      .then(function (r) {
+        if (r.status === 404) return null;
+        if (!r.ok) throw new Error('服务器返回 ' + r.status);
+        return r.json();
+      })
+      .then(function (j) {
+        if (!j || !j.data) return null;
+        return { updatedAt: j.updatedAt, data: expand(j.data) };
+      })
+      .catch(function (e) {
+        if (e && /Failed to fetch|NetworkError|load failed|TypeError/i.test(e.message || '')) {
+          return { _error: '无法连接共享服务器，请确认网络与共享地址可访问' };
+        }
+        throw e;
+      });
+  }
+
+  /* ---------- 共享数据表（多人双向实时同步） ---------- */
+  // 与 /api/shared 通信，自动携带发布平台要求的 ?sharecode
+  function sharedApiUrl() {
+    var u = location.origin + '/api/shared';
+    var sc = getShareCode();
+    if (sc) u += '?sharecode=' + encodeURIComponent(sc);
+    return u;
+  }
+  function pushChanges(changes) {
+    if (!changes || !changes.length) return Promise.resolve(null);
+    return fetch(sharedApiUrl(), {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ changes: changes })
+    }).then(function (r) {
+      if (!r.ok) throw new Error('同步失败 ' + r.status);
+      return r.json();
+    }).then(function (j) { return (j && j.data) ? { data: j.data, deleted: j.deleted || [] } : null; })
+      .catch(function (e) { return { _error: String(e && e.message || e) }; });
+  }
+  function pullShared() {
+    return fetch(sharedApiUrl()).then(function (r) {
+      if (!r.ok) throw new Error('同步失败 ' + r.status);
+      return r.json();
+    }).then(function (j) { return (j && j.data) ? { data: j.data, deleted: j.deleted || [] } : null; })
+      .catch(function (e) { return { _error: String(e && e.message || e) }; });
+  }
+
   global.HShare = {
     buildLink: buildLink, readFromUrl: readFromUrl, clearHash: clearHash,
-    count: count, has: has, copyText: copyText, KEYS: KEYS
+    count: count, has: has, copyText: copyText, KEYS: KEYS,
+    genRoomId: genRoomId, roomFromUrl: roomFromUrl,
+    publishRoom: publishRoom, fetchRoom: fetchRoom,
+    pushChanges: pushChanges, pullShared: pullShared
   };
 })(window);

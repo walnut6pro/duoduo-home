@@ -6,7 +6,7 @@
 (function (global) {
   'use strict';
   var DB_NAME = 'duoduo_home';
-  var DB_VERSION = 1; // 后续迭代请 +1，并在 onupgradeneeded 中只做增量
+  var DB_VERSION = 2; // 后续迭代请 +1，并在 onupgradeneeded 中只做增量
   var STORES = ['food', 'boxes', 'items', 'chores', 'dailies', 'meta'];
 
   var _db = null;
@@ -47,6 +47,10 @@
         }
         if (!db.objectStoreNames.contains('meta')) {
           db.createObjectStore('meta', { keyPath: 'key' });
+        }
+        // 自动本地备份快照仓库（独立于工作数据，clearAll 不清理，便于回滚）
+        if (!db.objectStoreNames.contains('backups')) {
+          db.createObjectStore('backups', { keyPath: 'id' });
         }
         // 未来升级：在此处用 e.oldVersion 判断后增量添加，勿删旧数据
       };
